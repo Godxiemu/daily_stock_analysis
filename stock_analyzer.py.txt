@@ -1,0 +1,308 @@
+# -*- coding: utf-8 -*-
+"""
+===================================
+天阶技术执行器 - 渣男心法 (Scumbag Execution)
+===================================
+
+核心职责：执行“地阶”的冷酷博弈规则，不带感情色彩地输出技术信号。
+
+执行原则：
+1. 损不足而奉有余 - 拒绝所有空头排列（MA5<MA10<MA20）的股票。
+2. 渣男心法 - 逻辑在时（多头排列）深情梭哈，逻辑破灭（跌破支撑）立即分手。
+3. 严进策略 - 乖离率过大（>5%）不追，只在回踩时介入。
+"""
+
+import logging
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List
+from enum import Enum
+
+import pandas as pd
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class TrendStatus(Enum):
+    """天阶趋势状态"""
+    SKY_HIGH = "天阶强势"        # MA5 > MA10 > MA20，且发散（主升浪）
+    RISING = "多头排列"          # MA5 > MA10 > MA20（持有/做多区）
+    CONSOLIDATION = "震荡洗盘"   # 均线缠绕
+    WEAK = "弱势回调"            # 跌破MA5/MA10，但在MA20之上
+    DEATH = "空头排列"           # MA5 < MA10 < MA20（垃圾时间/熔断）
+
+
+class VolumeStatus(Enum):
+    """量能博弈状态"""
+    BREAKOUT = "放量突破"        # 进攻信号
+    DUMP = "放量杀跌"            # 出货/恐慌信号
+    SHRINK_RALLY = "缩量上涨"    # 锁筹/动能衰竭
+    SHRINK_PULLBACK = "缩量回踩" # 最佳买点特征（洗盘）
+    NORMAL = "量能正常"
+
+
+class ExecutionSignal(Enum):
+    """渣男操作指令"""
+    SNIPER_BUY = "狙击买入"      # 缩量回踩 + 多头排列 (黄金买点)
+    MOMENTUM_BUY = "追势买入"    # 刚启动的突破
+    HOLD_TIGHT = "死拿"          # 趋势未坏，让利润奔跑
+    WAIT = "观望"                # 乖离率过高或趋势不明
+    CUT_LOSS = "斩立决"          # 跌破关键支撑
+    TAKE_PROFIT = "止盈"         # 情绪高潮
+
+
+@dataclass
+class TianjieTechnicalResult:
+    """天阶技术面扫描结果"""
+    code: str
+    
+    # 趋势判别
+    trend_status: TrendStatus = TrendStatus.CONSOLIDATION
+    trend_strength: float = 0.0      # 趋势强度 0-100
+    
+    # 关键点位
+    current_price: float = 0.0
+    ma5: float = 0.0
+    ma10: float = 0.0
+    ma20: float = 0.0
+    ma60: float = 0.0
+    
+    # 乖离率 (Bias) - 衡量"贪婪程度"
+    bias_ma5: float = 0.0            # (Close - MA5) / MA5 * 100
+    
+    # 量能分析
+    volume_status: VolumeStatus = VolumeStatus.NORMAL
+    volume_ratio: float = 0.0        # 量比 (今日量/5日均量)
+    
+    # 执行信号
+    signal: ExecutionSignal = ExecutionSignal.WAIT
+    signal_desc: str = ""            # 信号详细描述
+    risk_factors: List[str] = field(default_factory=list) # 风险点列表
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'code': self.code,
+            'trend_status': self.trend_status.value,
+            'trend_strength': self.trend_strength,
+            'current_price': self.current_price,
+            'ma5': self.ma5,
+            'ma10': self.ma10,
+            'ma20': self.ma20,
+            'bias_ma5': self.bias_ma5,
+            'volume_status': self.volume_status.value,
+            'volume_ratio': self.volume_ratio,
+            'signal': self.signal.value,
+            'signal_desc': self.signal_desc,
+            'risk_factors': self.risk_factors
+        }
+
+
+class StockTrendAnalyzer:
+    """
+    天阶技术分析器
+    只负责"术"（择时），不负责"道"（基本面定性）。
+    """
+    
+    # === 渣男心法核心参数 ===
+    # 1. 贪婪红线：乖离率超过5%禁止追高，防止接盘
+    MAX_BIAS_THRESHOLD = 5.0    
+    # 2. 狙击区间：回踩深度在 MA5 下方 3% 到 MA5 上方 1% 之间
+    BEST_BUY_BIAS_LOW = -3.0    
+    BEST_BUY_BIAS_HIGH = 1.0    
+    
+    def analyze(self, df: pd.DataFrame, code: str) -> TianjieTechnicalResult:
+        result = TianjieTechnicalResult(code=code)
+        
+        # 1. 数据完整性校验
+        if df is None or df.empty:
+            result.signal_desc = "数据为空，无法分析"
+            result.risk_factors.append("数据缺失")
+            return result
+            
+        if len(df) < 30:
+            result.signal_desc = "K线数据不足30天，无法计算趋势"
+            result.risk_factors.append("次新股/数据不足")
+            return result
+        
+        try:
+            # 预处理数据：确保按日期排序
+            df = df.sort_values('date').reset_index(drop=True)
+            
+            # 计算均线系统 (骨架)
+            self._calculate_mas(df)
+            
+            # 提取最新数据
+            latest = df.iloc[-1]
+            
+            result.current_price = float(latest['close'])
+            result.ma5 = float(latest['MA5'])
+            result.ma10 = float(latest['MA10'])
+            result.ma20 = float(latest['MA20'])
+            result.ma60 = float(latest['MA60']) if 'MA60' in df.columns else 0.0
+            
+            # 2. 计算乖离率 (贪婪指数)
+            if result.ma5 > 0:
+                result.bias_ma5 = (result.current_price - result.ma5) / result.ma5 * 100
+                
+            # 3. 判定趋势状态 (定势)
+            self._analyze_trend(result)
+            
+            # 4. 量能分析 (博弈)
+            self._analyze_volume(df, result)
+            
+            # 5. 生成操作信号 (决断)
+            self._generate_signal(result)
+            
+            return result
+
+        except Exception as e:
+            logger.error(f"技术分析异常 [{code}]: {e}", exc_info=True)
+            result.signal_desc = f"分析出错: {str(e)}"
+            return result
+    
+    def _calculate_mas(self, df: pd.DataFrame):
+        """计算移动平均线"""
+        df['MA5'] = df['close'].rolling(window=5).mean()
+        df['MA10'] = df['close'].rolling(window=10).mean()
+        df['MA20'] = df['close'].rolling(window=20).mean()
+        df['MA60'] = df['close'].rolling(window=60).mean()
+    
+    def _analyze_trend(self, result: TianjieTechnicalResult):
+        """核心趋势判定逻辑"""
+        ma5, ma10, ma20 = result.ma5, result.ma10, result.ma20
+        price = result.current_price
+        
+        # 完美多头排列：损不足而奉有余
+        if ma5 > ma10 > ma20:
+            result.trend_status = TrendStatus.RISING
+            
+            # 检查发散程度 (是否是主升浪)
+            divergence = (ma5 - ma20) / ma20
+            # 如果发散很大，说明在加速，定义为天阶强势
+            if divergence > 0.1 and result.bias_ma5 > 0:
+                result.trend_status = TrendStatus.SKY_HIGH
+                result.trend_strength = 90
+            else:
+                result.trend_strength = 75
+                
+        # 完美空头排列：渣男分手时刻
+        elif ma5 < ma10 < ma20:
+            result.trend_status = TrendStatus.DEATH
+            result.trend_strength = 10
+            result.risk_factors.append("处于空头排列(死亡通道)")
+            
+        # 弱势回调 (趋势未坏，但短期跌破快线)
+        elif ma5 < ma10 and ma10 > ma20:
+            if price > ma20:
+                result.trend_status = TrendStatus.WEAK
+                result.trend_strength = 40
+            else:
+                result.trend_status = TrendStatus.DEATH # 跌破生命线MA20
+                result.trend_strength = 20
+                
+        # 震荡/缠绕
+        else:
+            result.trend_status = TrendStatus.CONSOLIDATION
+            result.trend_strength = 50
+
+    def _analyze_volume(self, df: pd.DataFrame, result: TianjieTechnicalResult):
+        """量能博弈分析"""
+        if len(df) < 6: return
+        
+        latest_vol = df.iloc[-1]['volume']
+        # 计算过去5天的平均成交量（不含今天），避免今天还没收盘数据失真
+        avg_vol_5 = df['volume'].iloc[-6:-1].mean()
+        
+        pct_change = df.iloc[-1]['pct_chg'] if 'pct_chg' in df.columns else 0
+        
+        if avg_vol_5 > 0:
+            result.volume_ratio = latest_vol / avg_vol_5
+        else:
+            result.volume_ratio = 1.0
+            
+        # 量能定性
+        if result.volume_ratio > 1.8:
+            if pct_change > 0:
+                result.volume_status = VolumeStatus.BREAKOUT
+            else:
+                result.volume_status = VolumeStatus.DUMP # 放量跌，大凶
+                result.risk_factors.append("放量杀跌，主力出逃")
+        elif result.volume_ratio < 0.7:
+            if pct_change > 0:
+                result.volume_status = VolumeStatus.SHRINK_RALLY # 缩量涨，可能动能不足
+            else:
+                result.volume_status = VolumeStatus.SHRINK_PULLBACK # 缩量跌，洗盘特征
+        else:
+            result.volume_status = VolumeStatus.NORMAL
+
+    def _generate_signal(self, result: TianjieTechnicalResult):
+        """
+        生成最终操作信号：结合趋势、乖离率与量能
+        """
+        # 1. 熔断机制：空头排列
+        if result.trend_status == TrendStatus.DEATH:
+            result.signal = ExecutionSignal.CUT_LOSS
+            result.signal_desc = "空头排列，垃圾时间，不参与"
+            return
+
+        # 2. 严进策略：乖离率过大
+        if result.bias_ma5 > self.MAX_BIAS_THRESHOLD:
+            result.signal = ExecutionSignal.WAIT
+            result.signal_desc = f"乖离率过大({result.bias_ma5:.1f}%)，贪婪指数过高，严禁追高"
+            result.risk_factors.append("短期严重超买")
+            return
+            
+        # 3. 买点捕捉：多头趋势下的回踩
+        if result.trend_status in [TrendStatus.RISING, TrendStatus.SKY_HIGH]:
+            # 判断是否在"狙击区间" (回踩 MA5 附近)
+            in_buy_zone = (self.BEST_BUY_BIAS_LOW < result.bias_ma5 < self.BEST_BUY_BIAS_HIGH)
+            
+            if in_buy_zone:
+                # 最佳情况：缩量回踩
+                if result.volume_status == VolumeStatus.SHRINK_PULLBACK:
+                    result.signal = ExecutionSignal.SNIPER_BUY
+                    result.signal_desc = "多头缩量回踩MA5，天阶标准买点"
+                # 次佳情况：量能正常回踩
+                elif result.volume_status == VolumeStatus.NORMAL:
+                    result.signal = ExecutionSignal.MOMENTUM_BUY
+                    result.signal_desc = "趋势健康，位置适中，可尝试介入"
+                else:
+                    # 放量下跌回踩，有风险
+                    result.signal = ExecutionSignal.WAIT
+                    result.signal_desc = "回踩但量能过大，承接力度存疑"
+            
+            elif result.bias_ma5 >= self.BEST_BUY_BIAS_HIGH:
+                # 在 MA5 上方较远，但还没到超买
+                result.signal = ExecutionSignal.HOLD_TIGHT
+                result.signal_desc = "持股待涨，让利润奔跑"
+            
+            else:
+                # 跌破 MA5 太多 (<-3%)，可能在找 MA10/MA20
+                if result.current_price > result.ma20:
+                    result.signal = ExecutionSignal.WAIT
+                    result.signal_desc = "跌破MA5，观察下方MA20支撑"
+                else:
+                    result.signal = ExecutionSignal.CUT_LOSS
+                    result.signal_desc = "跌破生命线MA20，注意风险"
+        
+        # 4. 震荡市处理
+        elif result.trend_status == TrendStatus.CONSOLIDATION:
+            if result.volume_status == VolumeStatus.BREAKOUT:
+                result.signal = ExecutionSignal.MOMENTUM_BUY
+                result.signal_desc = "震荡突破，关注是否有效站稳"
+            else:
+                result.signal = ExecutionSignal.WAIT
+                result.signal_desc = "鱼身未现，多看少动"
+        
+        else:
+            result.signal = ExecutionSignal.WAIT
+            result.signal_desc = "趋势不明"
+
+    def format_analysis(self, result: TianjieTechnicalResult) -> str:
+        return f"趋势:{result.trend_status.value} | 信号:{result.signal.value} ({result.signal_desc})"
+
+
+# 兼容原有接口，供其他模块调用
+def analyze_stock(df: pd.DataFrame, code: str) -> TianjieTechnicalResult:
+    analyzer = StockTrendAnalyzer()
+    return analyzer.analyze(df, code)
