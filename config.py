@@ -126,6 +126,25 @@ class Config:
     webui_host: str = "127.0.0.1"
     webui_port: int = 8000
     
+    # === Dang氏投资配置 ===
+    # PE估值阈值
+    dang_pe_warning_cyclical: float = 20.0   # 周期股PE警告阈值
+    dang_pe_danger_cyclical: float = 30.0    # 周期股PE危险阈值（跑路）
+    dang_pe_danger_tech: float = 300.0       # 科技股PE危险阈值（不碰）
+    dang_pe_warning_bank: float = 8.0        # 银行股PE警告阈值
+    
+    # 股息率配置
+    dang_dividend_excellent: float = 5.0     # 优秀股息率（Dang氏最爱）
+    dang_dividend_good: float = 3.0          # 良好股息率
+    dang_dividend_min: float = 1.0           # 最低可接受股息率
+    
+    # 交易配置
+    dang_profit_take: float = 30.0           # 止盈阈值（涨幅%）
+    dang_profit_take_extreme: float = 50.0   # 强烈止盈阈值（涨幅%）
+    dang_rebuy_drop: float = 10.0            # 补仓阈值（跌幅%）
+    dang_bias_warning: float = 5.0           # 乖离率警告阈值
+    dang_bias_threshold: float = 8.0         # 乖离率危险阈值（Dang氏宽容）
+    
     # 单例实例存储
     _instance: Optional['Config'] = None
     

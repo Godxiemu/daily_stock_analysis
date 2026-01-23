@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-趋势交易分析器 - 基于用户交易理念
+Dang氏趋势交易分析器 - 融合价值投资与技术分析
 ===================================
 
-交易理念核心原则：
-1. 严进策略 - 不追高，追求每笔交易成功率
-2. 趋势交易 - MA5>MA10>MA20 多头排列，顺势而为
-3. 效率优先 - 关注筹码结构好的股票
-4. 买点偏好 - 在 MA5/MA10 附近回踩买入
+Dang氏交易理念核心原则：
+1. 生产资料至上 - 银行、有色、矿产优先，股息5%+
+2. PE估值铁律 - 周期股30PE跑路，科技股300PE不碰
+3. 止盈30% - 短期涨30%坚决止盈
+4. 补仓逻辑 - 跌10%以上才补仓，为拉高股息率
+5. 趋势交易 - MA5>MA10>MA20 多头排列（辅助参考）
 
-技术标准：
+技术标准（Dang氏相对宽容）：
 - 多头排列：MA5 > MA10 > MA20
-- 乖离率：(Close - MA5) / MA5 < 5%（不追高）
+- 乖离率：(Close - MA5) / MA5 < 8%（Dang氏更宽容）
 - 量能形态：缩量回调优先
 """
 
@@ -133,11 +134,14 @@ class StockTrendAnalyzer:
     4. 买点识别 - 回踩 MA5/MA10 支撑
     """
     
-    # 交易参数配置
-    BIAS_THRESHOLD = 5.0        # 乖离率阈值（%），超过此值不买入
+    # Dang氏交易参数配置
+    BIAS_THRESHOLD = 8.0        # 乖离率阈值（%），Dang氏相对宽容（原5%）
+    BIAS_WARNING = 5.0          # 乖离率警告阈值（%）
     VOLUME_SHRINK_RATIO = 0.7   # 缩量判断阈值（当日量/5日均量）
     VOLUME_HEAVY_RATIO = 1.5    # 放量判断阈值
     MA_SUPPORT_TOLERANCE = 0.02  # MA 支撑判断容忍度（2%）
+    PROFIT_TAKE_THRESHOLD = 30.0 # Dang氏止盈阈值（涨幅%）
+    REBUY_DROP_THRESHOLD = 10.0  # Dang氏补仓阈值（跌幅%）
     
     def __init__(self):
         """初始化分析器"""
@@ -377,7 +381,7 @@ class StockTrendAnalyzer:
         elif result.trend_status in [TrendStatus.BEAR, TrendStatus.STRONG_BEAR]:
             risks.append(f"⚠️ {result.trend_status.value}，不宜做多")
         
-        # === 乖离率评分（30分）===
+        # === 乖离率评分（30分）=== Dang氏相对宽容
         bias = result.bias_ma5
         if bias < 0:
             # 价格在 MA5 下方（回调中）
@@ -393,12 +397,15 @@ class StockTrendAnalyzer:
         elif bias < 2:
             score += 28
             reasons.append(f"✅ 价格贴近MA5({bias:.1f}%)，介入好时机")
+        elif bias < self.BIAS_WARNING:
+            score += 22
+            reasons.append(f"✅ 乖离率安全({bias:.1f}%<5%)，可介入")
         elif bias < self.BIAS_THRESHOLD:
-            score += 20
-            reasons.append(f"⚡ 价格略高于MA5({bias:.1f}%)，可小仓介入")
+            score += 15
+            reasons.append(f"⚡ 乖离率略高({bias:.1f}%)，Dang氏可接受，小仓介入")
         else:
             score += 5
-            risks.append(f"❌ 乖离率过高({bias:.1f}%>5%)，严禁追高！")
+            risks.append(f"⚠️ 乖离率过高({bias:.1f}%>{self.BIAS_THRESHOLD}%)，等回调")
         
         # === 量能评分（20分）===
         volume_scores = {
