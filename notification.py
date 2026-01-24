@@ -456,18 +456,23 @@ class NotificationService:
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
         
+        # 过滤成功和失败的结果
+        success_results = [r for r in results if r.success]
+        failed_results = [r for r in results if not r.success]
+        
         # 按评分排序（高分在前）
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = sorted(success_results, key=lambda x: x.sentiment_score, reverse=True)
         
         # 统计信息
-        buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
-        sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
-        hold_count = sum(1 for r in results if r.operation_advice in ['持有', '观望'])
+        buy_count = sum(1 for r in success_results if r.operation_advice in ['买入', '加仓', '强烈买入'])
+        sell_count = sum(1 for r in success_results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
+        hold_count = sum(1 for r in success_results if r.operation_advice in ['持有', '观望'])
+        fail_count = len(failed_results)
         
         report_lines = [
             f"# 🎯 {report_date} 决策仪表盘",
             "",
-            f"> 共分析 **{len(results)}** 只股票 | 🟢买入:{buy_count} 🟡观望:{hold_count} 🔴卖出:{sell_count}",
+            f"> 共分析 **{len(results)}** 只股票 | 🟢买入:{buy_count} 🟡观望:{hold_count} 🔴卖出:{sell_count} ⚠️失败:{fail_count}",
             "",
             "---",
             "",
@@ -541,6 +546,27 @@ class NotificationService:
                 f"⏰ **时效性**: {time_sense}",
                 "",
             ])
+            
+            # ========== 💰 股息分析 (Dang氏核心) ==========
+            # 从 dashboard 或 result.dashboard 中提取 dividend_analysis
+            # 注意：GeminiAnalyzer 可能会把 dividend_analysis 放在 dashboard 根节点
+            div_data = dashboard.get('dividend_analysis', {})
+            if div_data:
+                div_yield = div_data.get('dividend_yield', 0)
+                div_comment = div_data.get('dividend_comment', '')
+                try:
+                    # 尝试转换数值
+                    yield_val = float(div_yield)
+                    # 如果预期股息率 > 3%，显示此板块
+                    if yield_val > 0.03: 
+                        report_lines.extend([
+                            "#### 💰 生产资料价值 (Dang氏)",
+                            f"**预期股息率**: **{yield_val:.2f}%** (基于预测EPS测算)",
+                            f"💡 *{div_comment}*",
+                            "",
+                        ])
+                except:
+                    pass
             
             # 持仓分类建议
             if pos_advice:
@@ -694,6 +720,24 @@ class NotificationService:
                 "",
             ])
         
+            report_lines.extend([
+                "---",
+                "",
+            ])
+        
+        # 失败任务报告
+        if failed_results:
+            report_lines.extend([
+                "## ❌ 分析失败列表",
+                "",
+                "| 股票代码 | 股票名称 | 失败原因 |",
+                "|---------|---------|---------|",
+            ])
+            for r in failed_results:
+                err = r.error_message.replace('\n', ' ') if r.error_message else "未知错误"
+                report_lines.append(f"| {r.code} | {r.name} | {err[:50]} |")
+            report_lines.append("")
+        
         # 底部（去除免责声明）
         report_lines.extend([
             "",
@@ -716,18 +760,23 @@ class NotificationService:
         """
         report_date = datetime.now().strftime('%Y-%m-%d')
         
+        # 过滤成功和失败的结果
+        success_results = [r for r in results if r.success]
+        failed_results = [r for r in results if not r.success]
+        
         # 按评分排序
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = sorted(success_results, key=lambda x: x.sentiment_score, reverse=True)
         
         # 统计
-        buy_count = sum(1 for r in results if r.operation_advice in ['买入', '加仓', '强烈买入'])
-        sell_count = sum(1 for r in results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
-        hold_count = sum(1 for r in results if r.operation_advice in ['持有', '观望'])
+        buy_count = sum(1 for r in success_results if r.operation_advice in ['买入', '加仓', '强烈买入'])
+        sell_count = sum(1 for r in success_results if r.operation_advice in ['卖出', '减仓', '强烈卖出'])
+        hold_count = sum(1 for r in success_results if r.operation_advice in ['持有', '观望'])
+        fail_count = len(failed_results)
         
         lines = [
             f"## 🎯 {report_date} 决策仪表盘",
             "",
-            f"> {len(results)}只股票 | 🟢买入:{buy_count} 🟡观望:{hold_count} 🔴卖出:{sell_count}",
+            f"> {len(results)}只股票 | 🟢买:{buy_count} 🟡观:{hold_count} 🔴卖:{sell_count} ⚠️失败:{fail_count}",
             "",
         ]
         
@@ -750,6 +799,17 @@ class NotificationService:
             if one_sentence:
                 lines.append(f"📌 **{one_sentence[:80]}**")
                 lines.append("")
+                
+            # 💰 股息分析 (企业微信精简版)
+            div_data = dashboard.get('dividend_analysis', {})
+            if div_data:
+                try:
+                    yield_val = float(div_data.get('dividend_yield', 0))
+                    if yield_val > 0.03:
+                         lines.append(f"💰 预期股息: **{yield_val:.2f}%**")
+                         lines.append("")
+                except:
+                    pass
             
             # 重要信息区（舆情+基本面）
             info_lines = []
@@ -830,6 +890,11 @@ class NotificationService:
             lines.append("---")
             lines.append("")
         
+        # 失败任务简报
+        if failed_results:
+            lines.append("⚠️ **分析失败**: " + ",".join([r.code for r in failed_results]))
+            lines.append("")
+
         # 底部
         lines.append(f"*生成时间: {datetime.now().strftime('%H:%M')}*")
         

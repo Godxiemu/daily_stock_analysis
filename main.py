@@ -472,22 +472,44 @@ class StockAnalysisPipeline:
             single_stock_notify: 是否启用单股推送模式（每分析完一只立即推送）
             
         Returns:
-            AnalysisResult 或 None
+            AnalysisResult (failed if error occurs)
         """
         logger.info(f"========== 开始处理 {code} ==========")
         
         try:
+            # 获取股票名称（用于错误报告）
+            stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
+            
             # Step 1: 获取并保存数据
             success, error = self.fetch_and_save_stock_data(code)
             
             if not success:
                 logger.warning(f"[{code}] 数据获取失败: {error}")
-                # 即使获取失败，也尝试用已有数据分析
+                # 即使数据获取失败，如果本地有旧数据也可以尝试？
+                # 但通常没有数据就无法分析，直接返回失败
+                return AnalysisResult(
+                    code=code,
+                    name=stock_name,
+                    sentiment_score=0,
+                    trend_prediction="分析失败",
+                    operation_advice="异常",
+                    success=False,
+                    error_message=f"数据获取失败: {error}"
+                )
             
             # Step 2: AI 分析
             if skip_analysis:
                 logger.info(f"[{code}] 跳过 AI 分析（dry-run 模式）")
-                return None
+                # Return a dummy success result for dry-run
+                return AnalysisResult(
+                    code=code,
+                    name=stock_name,
+                    sentiment_score=50,
+                    trend_prediction="DryRun",
+                    operation_advice="观望",
+                    analysis_summary="Dry Run Mode - Data Fetched Only",
+                    success=True
+                )
             
             result = self.analyze_stock(code)
             
@@ -507,13 +529,30 @@ class StockAnalysisPipeline:
                             logger.warning(f"[{code}] 单股推送失败")
                     except Exception as e:
                         logger.error(f"[{code}] 单股推送异常: {e}")
-            
-            return result
+                return result
+            else:
+                return AnalysisResult(
+                    code=code,
+                    name=stock_name,
+                    sentiment_score=0,
+                    trend_prediction="分析失败",
+                    operation_advice="异常",
+                    success=False,
+                    error_message="AI 分析返回空结果"
+                )
             
         except Exception as e:
             # 捕获所有异常，确保单股失败不影响整体
             logger.exception(f"[{code}] 处理过程发生未知异常: {e}")
-            return None
+            return AnalysisResult(
+                code=code,
+                name=STOCK_NAME_MAP.get(code, f'股票{code}'),
+                sentiment_score=0,
+                trend_prediction="系统异常",
+                operation_advice="异常",
+                success=False,
+                error_message=str(e)
+            )
     
     def run(
         self, 
@@ -593,8 +632,8 @@ class StockAnalysisPipeline:
             success_count = sum(1 for code in stock_codes if self.db.has_today_data(code))
             fail_count = len(stock_codes) - success_count
         else:
-            success_count = len(results)
-            fail_count = len(stock_codes) - success_count
+            success_count = sum(1 for r in results if r.success)
+            fail_count = len(results) - success_count
         
         logger.info(f"===== 分析完成 =====")
         logger.info(f"成功: {success_count}, 失败: {fail_count}, 耗时: {elapsed_time:.2f} 秒")
