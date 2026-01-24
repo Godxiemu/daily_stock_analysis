@@ -782,6 +782,34 @@ class GeminiAnalyzer:
             except Exception as div_err:
                 logger.warning(f"股息率数据注入失败: {div_err}")
 
+            # [CRITICAL Fix] 强制注入估值/同业/筹码等Python数据（确保报告展示）
+            try:
+                if result.dashboard is None:
+                    result.dashboard = {}
+                    
+                # 注入10年PE分位数据
+                if 'valuation_history' in context and context['valuation_history']:
+                    result.dashboard['valuation_history'] = context['valuation_history']
+                    logger.debug(f"已注入估值历史数据: PE分位={context['valuation_history'].get('pe_rank_10y', 0):.1f}%")
+                
+                # 注入同业比价数据
+                if 'peer_comparison' in context and context['peer_comparison']:
+                    result.dashboard['peer_comparison'] = context['peer_comparison']
+                    logger.debug(f"已注入同业比价数据")
+                
+                # 注入筹码分布数据
+                if 'chip' in context and context['chip']:
+                    result.dashboard['chip_data'] = context['chip']
+                    logger.debug(f"已注入筹码数据")
+                
+                # 注入实时行情数据
+                if 'realtime' in context and context['realtime']:
+                    result.dashboard['realtime'] = context['realtime']
+                    logger.debug(f"已注入实时行情数据")
+                    
+            except Exception as inject_err:
+                logger.warning(f"扩展数据注入失败: {inject_err}")
+
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
             
             return result

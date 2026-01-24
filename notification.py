@@ -568,6 +568,69 @@ class NotificationService:
                 except:
                     pass
             
+            # ========== 📈 估值分位与同业比价 (V4.0 核心数据) ==========
+            val_hist = dashboard.get('valuation_history', {})
+            peer_comp = dashboard.get('peer_comparison', {})
+            chip_raw = dashboard.get('chip_data', {})
+            realtime_raw = dashboard.get('realtime', {})
+            
+            # 估值分位展示
+            if val_hist:
+                pe_rank = val_hist.get('pe_rank_10y', 0)
+                current_pe = val_hist.get('current_pe', 0)
+                rank_status = "✅ 极度低估" if pe_rank < 20 else ("🟡 合理区间" if pe_rank < 60 else "🔴 偏高谨慎")
+                report_lines.extend([
+                    "#### 📊 10年估值分位",
+                    f"| PE(TTM) | 10年分位 | 状态 |",
+                    f"|---------|----------|------|",
+                    f"| **{current_pe:.2f}** | **{pe_rank:.1f}%** | {rank_status} |",
+                    "",
+                ])
+            
+            # 同业比价展示
+            if peer_comp:
+                industry = peer_comp.get('industry', 'N/A')
+                industry_median_pe = peer_comp.get('industry_median_pe', 0)
+                top_peers = peer_comp.get('top_peers', [])
+                report_lines.extend([
+                    f"#### 👥 同业比价 ({industry})",
+                    f"**行业中位PE**: {industry_median_pe:.2f}",
+                    "",
+                ])
+                if top_peers:
+                    report_lines.append("| 排名 | 股票 | PE |")
+                    report_lines.append("|------|------|-----|")
+                    for i, p in enumerate(top_peers[:3], 1):
+                        report_lines.append(f"| {i} | {p.get('name', 'N/A')} | {p.get('pe', 'N/A')} |")
+                    report_lines.append("")
+            
+            # 增强筹码展示
+            if chip_raw:
+                profit_ratio = chip_raw.get('profit_ratio', 0)
+                avg_cost = chip_raw.get('avg_cost', 0)
+                conc_90 = chip_raw.get('concentration_90', 0)
+                chip_status = chip_raw.get('chip_status', 'N/A')
+                chip_emoji = "✅" if profit_ratio < 0.7 else ("⚠️" if profit_ratio < 0.9 else "🚨")
+                report_lines.extend([
+                    f"#### 🎯 筹码分布",
+                    f"| 获利比例 | 平均成本 | 90%集中度 | 状态 |",
+                    f"|----------|----------|-----------|------|",
+                    f"| **{profit_ratio:.1%}** | {avg_cost:.2f}元 | {conc_90:.2%} | {chip_emoji}{chip_status} |",
+                    "",
+                ])
+            
+            # 实时行情关键指标(量比/换手率)
+            if realtime_raw:
+                vol_ratio = realtime_raw.get('volume_ratio', 'N/A')
+                turnover = realtime_raw.get('turnover_rate', 'N/A')
+                pe = realtime_raw.get('pe_ratio', 'N/A')
+                report_lines.extend([
+                    f"#### 📡 实时行情",
+                    f"量比: **{vol_ratio}** | 换手率: **{turnover}%** | 动态PE: {pe}",
+                    "",
+                ])
+
+            
             # 持仓分类建议
             if pos_advice:
                 report_lines.extend([
