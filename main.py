@@ -50,6 +50,7 @@ from notification import NotificationService, NotificationChannel, send_daily_re
 from search_service import SearchService, SearchResponse
 from stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from market_analyzer import MarketAnalyzer
+from dividend_analyzer import DividendAnalyzer
 
 # 配置日志格式
 LOG_FORMAT = '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s'
@@ -150,6 +151,7 @@ class StockAnalysisPipeline:
         self.db = get_db()
         self.fetcher_manager = DataFetcherManager()
         self.akshare_fetcher = AkshareFetcher()  # 用于获取增强数据（量比、筹码等）
+        self.dividend_analyzer = DividendAnalyzer() # Dang氏股息分析器
         self.trend_analyzer = StockTrendAnalyzer()  # 趋势分析器
         self.analyzer = GeminiAnalyzer()
         self.notifier = NotificationService()
@@ -263,6 +265,25 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取筹码分布失败: {e}")
             
+            # Step 2.5: Dang氏预期股息率计算
+            dividend_data = None
+            try:
+                if realtime_quote and realtime_quote.price > 0:
+                    pe_dyn = realtime_quote.pe_ratio
+                    # 如果 PE 无效（如亏损），则 skip
+                    if pe_dyn and pe_dyn > 0:
+                        exp_yield, exp_reason = self.dividend_analyzer.calculate_expected_yield(
+                            code, realtime_quote.price, pe_dyn
+                        )
+                        if exp_yield > 0:
+                            dividend_data = {
+                                'expected_yield': exp_yield,
+                                'reason': exp_reason
+                            }
+                            logger.info(f"[{code}] 预期股息率: {exp_yield:.2f}% ({exp_reason})")
+            except Exception as e:
+                logger.warning(f"[{code}] 股息率计算失败: {e}")
+
             # Step 3: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
             try:
@@ -315,7 +336,8 @@ class StockAnalysisPipeline:
                 realtime_quote, 
                 chip_data, 
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,  # 传入股票名称
+                dividend_data # 传入股息数据
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -334,7 +356,8 @@ class StockAnalysisPipeline:
         realtime_quote: Optional[RealtimeQuote],
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        dividend_data: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -400,6 +423,10 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
+            
+        # 添加预期股息数据
+        if dividend_data:
+            enhanced['dividend_analysis'] = dividend_data
         
         return enhanced
     

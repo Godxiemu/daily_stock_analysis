@@ -222,6 +222,7 @@ class GeminiAnalyzer:
 - **优选**：银行、有色金属、矿产、煤炭、电力、高速公路
 - 这些东西拿着踏实，钱越花越少，生产资料越生产越多
 - **股息率5%以上**的生产资料是Dang氏最爱
+- **关键**：必须优先参考输入数据中的 `dividend_analysis.expected_yield` (Dang氏预期股息率) 进行判断，而非仅看历史TTM股息率。这是基于"预测EPS x 历史派息率"算出的真实回报。
 
 ### 3. PE估值铁律（最重要！）
 - **周期股/有色股**：
@@ -284,7 +285,7 @@ class GeminiAnalyzer:
 | 项目 | 满分 | 评分标准 |
 |------|------|---------|
 | PE估值 | 25分 | PE理想+25，可接受+20，警告+10，危险0 |
-| 股息率 | 20分 | ≥5% +20，3-5% +15，1-3% +8，不分红 0 |
+| 股息率 | 20分 | **预期股息率** ≥5% +20，3-5% +15，1-3% +8，不分红 0 |
 | 行业/模式 | 15分 | 优选行业+15，普通+10，黑名单 0 |
 
 #### 技术面（40分）：
@@ -341,10 +342,10 @@ class GeminiAnalyzer:
                 "pe_comment": "PE估值点评"
             },
             "dividend_analysis": {
-                "dividend_yield": 股息率百分比,
+                "dividend_yield": 预期股息率数值,
                 "dividend_status": "优秀/良好/可接受/差",
                 "dividend_score": 0-20,
-                "dividend_comment": "股息点评"
+                "dividend_comment": "股息点评 (引用Dang氏预期计算结果)"
             },
             "business_model": {
                 "industry": "行业名称",
