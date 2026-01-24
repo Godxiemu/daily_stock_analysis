@@ -148,19 +148,20 @@ class DividendAnalyzer:
             reason_payout = f"三年平均{base_payout*100:.1f}%"
             
         # 3. 行业与类型修正 (Dang Correction)
+        # 注意：只有在没有历史数据时才应用默认底线
+        # 有历史数据时应使用实际派息率，避免高估
         final_payout = base_payout
         correction_log = []
         
-        if stock_type == 'bank': 
-            # A类：稳健型
-            # 银行通常稳定，且有30%底线要求
-            if final_payout < 0.30:
-                final_payout = 0.30
-                correction_log.append("银行修正(底线30%)")
-        elif stock_type == 'cyclical':
-            # B类：周期型
-            # 周期高点(PE极低)时，往往为了过冬会降低分红率 -> 保守估计
-            pass 
+        if stock_type == 'bank' and base_payout == 0:
+            # 银行股无历史数据时，给30%保底
+            final_payout = 0.30
+            correction_log.append("银行默认30%")
+        elif stock_type == 'utility' and base_payout == 0:
+            # 公用事业无历史数据时，给30%保底
+            final_payout = 0.30
+            correction_log.append("公用事业默认30%")
+        # 周期股等其他类型：直接用历史平均值，不做修正
         
         # TODO: 更多复杂的修正逻辑需要读取财报/公告，目前暂无法自动化
         # 比如："大股东缺钱纠正"、"承诺公告纠正"

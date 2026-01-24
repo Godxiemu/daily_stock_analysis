@@ -911,13 +911,161 @@ class AkshareFetcher(BaseFetcher):
                        f"70%集中度={chip.concentration_70:.2%}")
             return chip
             
+            return chip
+            
+            return chip
+            
         except Exception as e:
             logger.error(f"[API错误] 获取 {stock_code} 筹码分布失败: {e}")
             return None
-    
+            
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """
+        获取股票名称 (Fallback)
+        """
+        import akshare as ak
+        if _is_etf_code(stock_code) or _is_hk_code(stock_code):
+            return None # 暂未实现
+            
+        try:
+            self._enforce_rate_limit()
+            # 个股信息
+            df = ak.stock_individual_info_em(symbol=stock_code)
+            if df.empty: return None
+            
+            # 查找名称
+            # df columns: item, value
+            name_row = df[df['item'] == '股票简称']
+            if not name_row.empty:
+                return str(name_row.iloc[0]['value'])
+            
+            return None
+        except Exception as e:
+            logger.warning(f"[API错误] 获取股票名称失败: {e}")
+            return None
+
+    def get_valuation_history(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        获取历史估值分位 (纵向比价)
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            {
+                'current_pe': float,
+                'pe_rank_10y': float, # 10年分位 %
+                'current_pb': float,
+                'pb_rank_10y': float, # 10年分位 %
+            }
+        """
+        import akshare as ak
+        if _is_etf_code(stock_code) or _is_hk_code(stock_code):
+            return None
+            
+        try:
+            self._enforce_rate_limit()
+            logger.info(f"[API调用] 获取 {stock_code} 10年估值数据...")
+            
+            # 使用百度接口
+            df = ak.stock_zh_valuation_baidu(symbol=stock_code, indicator="市盈率(TTM)", period="近10年")
+            
+            if df.empty:
+                logger.warning(f"[API返回] 历史估值数据为空 {stock_code}")
+                return None
+                
+            # 处理列名差异
+            val_col = 'value'
+            if 'date' in df.columns:
+                 df['trade_date'] = pd.to_datetime(df['date'])
+            elif 'value' in df.columns:
+                 df['trade_date'] = df.index
+            else:
+                 return None
+                 
+            # 筛选近10年
+            current = df[val_col].iloc[-1]
+            rank = (df[val_col] < current).mean() * 100
+            
+            result = {
+                'current_pe': float(current),
+                'pe_rank_10y': float(rank),
+                # 百度接口暂只取了PE，PB若需要可多次调用，这里先只返回PE
+            }
+            logger.info(f"[历史估值] {stock_code}: PE={current:.2f}, 10年分位={rank:.1f}%")
+            return result
+        except Exception as e:
+            logger.warning(f"[API错误] 获取历史估值失败: {e}")
+            return None
+
+    def get_peer_comparison(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        获取同业比价数据 (横向比价)
+        """
+        import akshare as ak
+        if _is_etf_code(stock_code) or _is_hk_code(stock_code):
+            return None
+            
+        try:
+            # 1. 获取行业
+            self._enforce_rate_limit()
+            info = ak.stock_individual_info_em(symbol=stock_code)
+            industry_row = info[info['item'] == '行业']
+            if industry_row.empty:
+                return None
+            industry = industry_row.iloc[0]['value']
+            
+            # 2. 获取同业
+            self._enforce_rate_limit()
+            peers_df = ak.stock_board_industry_cons_em(symbol=industry)
+            if peers_df.empty:
+                return None
+                
+            # 3. 寻找总市值列 (Fuzzy Match, 解决乱码/变动)
+            mv_col = None
+            pe_col = None
+            
+            for col in peers_df.columns:
+                if '市值' in col and '总' in col:
+                    mv_col = col
+                if '市盈率' in col and '动' in col:
+                    pe_col = col
+            
+            # Fallback
+            if not mv_col:
+                for col in peers_df.columns:
+                    if '市值' in col: mv_col = col; break
+            
+            if not mv_col:
+                return None # 无法排序
+                
+            # 排序取龙头
+            peers_df.sort_values(by=mv_col, ascending=False, inplace=True)
+            top_peers = peers_df.head(5)
+            
+            # 计算同业平均PE
+            avg_pe = 0.0
+            if pe_col:
+                valid_pe = peers_df[peers_df[pe_col] > 0][pe_col]
+                if not valid_pe.empty:
+                    avg_pe = float(valid_pe.median()) # 中位数更稳健
+            
+            result = {
+                'industry': industry,
+                'top_peers': top_peers['名称'].tolist() if '名称' in top_peers.columns else [],
+                'avg_pe': avg_pe,
+                'peer_count': len(peers_df)
+            }
+            logger.info(f"[同业比价] {stock_code}({industry}): 行业中位PE={avg_pe:.2f}, 龙头={result['top_peers'][:3]}")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"[API错误] 获取同业数据失败: {e}")
+            return None
+
     def get_enhanced_data(self, stock_code: str, days: int = 60) -> Dict[str, Any]:
         """
-        获取增强数据（历史K线 + 实时行情 + 筹码分布）
+        获取增强数据（历史K线 + 实时行情 + 筹码分布 + 估值分析 + 同业比较）
         
         Args:
             stock_code: 股票代码
@@ -931,6 +1079,8 @@ class AkshareFetcher(BaseFetcher):
             'daily_data': None,
             'realtime_quote': None,
             'chip_distribution': None,
+            'valuation_history': None, # New
+            'peer_comparison': None,   # New
         }
         
         # 获取日线数据
@@ -945,6 +1095,12 @@ class AkshareFetcher(BaseFetcher):
         
         # 获取筹码分布
         result['chip_distribution'] = self.get_chip_distribution(stock_code)
+        
+        # 获取历史估值 (New)
+        result['valuation_history'] = self.get_valuation_history(stock_code)
+        
+        # 获取同业比价 (New)
+        result['peer_comparison'] = self.get_peer_comparison(stock_code)
         
         return result
 

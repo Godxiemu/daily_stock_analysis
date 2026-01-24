@@ -251,7 +251,16 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取实时行情失败: {e}")
             
-            # 如果还是没有名称，使用代码作为名称
+            # 如果还是没有名称 (或仅有默认名称)，尝试专门获取名称接口
+            if not stock_name or stock_name.startswith('股票'):
+                try:
+                    name_fallback = self.akshare_fetcher.get_stock_name(code)
+                    if name_fallback:
+                        stock_name = name_fallback
+                        logger.info(f"[{code}] 通过基础信息接口获取名称: {stock_name}")
+                except Exception as e:
+                     logger.warning(f"[{code}] 获取名称失败: {e}")
+
             if not stock_name:
                 stock_name = f'股票{code}'
             
@@ -265,26 +274,65 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取筹码分布失败: {e}")
             
-            # Step 2.5: Dang氏预期股息率计算
+            # Step 2.5: Dang氏预期股息率计算 (带兜底逻辑)
             dividend_data = None
             try:
+                # 优先使用实时行情，否则从其他API兜底
+                price_for_calc = None
+                pe_for_calc = None
+                
                 if realtime_quote and realtime_quote.price > 0:
-                    pe_dyn = realtime_quote.pe_ratio
-                    # 如果 PE 无效（如亏损），则 skip
-                    if pe_dyn and pe_dyn > 0:
-                        exp_yield, exp_reason = self.dividend_analyzer.calculate_expected_yield(
-                            code, realtime_quote.price, pe_dyn
-                        )
-                        if exp_yield > 0:
-                            dividend_data = {
-                                'expected_yield': exp_yield,
-                                'reason': exp_reason
-                            }
-                            logger.info(f"[{code}] 预期股息率: {exp_yield:.2f}% ({exp_reason})")
+                    price_for_calc = realtime_quote.price
+                    pe_for_calc = realtime_quote.pe_ratio
+                else:
+                    # 兜底方案：使用 stock_individual_info_em 接口获取价格
+                    import akshare as ak
+                    try:
+                        info_df = ak.stock_individual_info_em(symbol=code)
+                        if info_df is not None and not info_df.empty:
+                            # 第一行 (index=0) 固定是股价
+                            try:
+                                price_for_calc = float(info_df.iloc[0, 1])
+                                logger.info(f"[{code}] 使用基础信息接口价格兜底: {price_for_calc}")
+                            except Exception as e:
+                                logger.debug(f"[{code}] 价格转换失败: {e}")
+                    except Exception as e:
+                        logger.debug(f"[{code}] 基础信息接口价格获取失败: {e}")
+                    
+                    # 兜底: 从历史估值接口获取PE
+                    if price_for_calc:
+                        val_hist = self.akshare_fetcher.get_valuation_history(code)
+                        if val_hist and 'current_pe' in val_hist:
+                            pe_for_calc = val_hist['current_pe']
+                            logger.info(f"[{code}] 使用历史估值接口PE兜底: {pe_for_calc:.2f}")
+                
+                # 执行股息率计算
+                if price_for_calc and price_for_calc > 0 and pe_for_calc and pe_for_calc > 0:
+                    exp_yield, exp_reason = self.dividend_analyzer.calculate_expected_yield(
+                        code, price_for_calc, pe_for_calc
+                    )
+                    if exp_yield > 0:
+                        dividend_data = {
+                            'expected_yield': exp_yield,
+                            'reason': exp_reason
+                        }
+                        logger.info(f"[{code}] 预期股息率: {exp_yield:.2f}% ({exp_reason})")
+                else:
+                    logger.warning(f"[{code}] 无法计算股息率: 价格={price_for_calc}, PE={pe_for_calc}")
             except Exception as e:
                 logger.warning(f"[{code}] 股息率计算失败: {e}")
 
-            # Step 3: 趋势分析（基于交易理念）
+            # Step 2.6: 获取历史估值和同业比价 (V4.0 Upgrade) - 不再依赖realtime_quote
+            valuation_history = None
+            peer_comparison = None
+            try:
+                # 始终尝试获取估值和同业数据
+                valuation_history = self.akshare_fetcher.get_valuation_history(code)
+                peer_comparison = self.akshare_fetcher.get_peer_comparison(code)
+                if valuation_history:
+                    logger.info(f"[{code}] 历史估值: PE分位={valuation_history.get('pe_rank_10y', 0):.1f}%")
+            except Exception as e:
+                logger.warning(f"[{code}] 获取估值/同业数据失败: {e}")
             trend_result: Optional[TrendAnalysisResult] = None
             try:
                 # 获取历史数据进行趋势分析
@@ -337,7 +385,9 @@ class StockAnalysisPipeline:
                 chip_data, 
                 trend_result,
                 stock_name,  # 传入股票名称
-                dividend_data # 传入股息数据
+                dividend_data, # 传入股息数据
+                valuation_history, # New
+                peer_comparison # New
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -357,7 +407,9 @@ class StockAnalysisPipeline:
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
         stock_name: str = "",
-        dividend_data: Optional[Dict] = None
+        dividend_data: Optional[Dict] = None,
+        valuation_history: Optional[Dict] = None,
+        peer_comparison: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -427,6 +479,14 @@ class StockAnalysisPipeline:
         # 添加预期股息数据
         if dividend_data:
             enhanced['dividend_analysis'] = dividend_data
+            
+        # 添加历史估值
+        if valuation_history:
+            enhanced['valuation_history'] = valuation_history
+            
+        # 添加同业比价
+        if peer_comparison:
+            enhanced['peer_comparison'] = peer_comparison
         
         return enhanced
     
