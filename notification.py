@@ -218,6 +218,31 @@ class NotificationService:
         """获取所有已配置渠道的名称"""
         return ', '.join([ChannelDetector.get_channel_name(ch) for ch in self._available_channels])
     
+    def _clean_one_sentence(self, text: str) -> str:
+        """
+        清洗一句话决策，移除 JSON/代码块标记
+        
+        防止 AI 返回格式异常时直接显示原始 JSON
+        """
+        if not text:
+            return "暂无决策建议"
+        
+        text = str(text).strip()
+        
+        # 检测是否包含 JSON 或代码块
+        if text.startswith('```') or text.startswith('{') or text.startswith('['):
+            return "AI 返回格式异常，请查看详细分析"
+        
+        # 移除可能的 markdown 代码块标记
+        if '```' in text:
+            text = text.split('```')[0].strip()
+        
+        # 截断过长内容
+        if len(text) > 200:
+            text = text[:200] + "..."
+        
+        return text if text else "暂无决策建议"
+    
     def generate_daily_report(
         self, 
         results: List[AnalysisResult],
@@ -532,7 +557,7 @@ class NotificationService:
             
             # ========== 核心结论 ==========
             core = dashboard.get('core_conclusion', {}) if dashboard else {}
-            one_sentence = core.get('one_sentence', result.analysis_summary)
+            one_sentence = self._clean_one_sentence(core.get('one_sentence', result.analysis_summary))
             time_sense = core.get('time_sensitivity', '本周内')
             pos_advice = core.get('position_advice', {})
             
@@ -557,11 +582,11 @@ class NotificationService:
                 try:
                     # 尝试转换数值
                     yield_val = float(div_yield)
-                    # 如果预期股息率 > 3%，显示此板块
-                    if yield_val > 0.03: 
+                    # 如果预期股息率 > 3%，显示此板块（注：注入值是百分比数值，如2.5表示2.5%）
+                    if yield_val > 3: 
                         report_lines.extend([
                             "#### 💰 生产资料价值 (Dang氏)",
-                            f"**预期股息率**: **{yield_val:.2f}%** (基于预测EPS测算)",
+                            f"预期股息率: **{yield_val:.2f}%** (基于预测EPS测算)",
                             f"💡 *{div_comment}*",
                             "",
                         ])
@@ -858,9 +883,9 @@ class NotificationService:
             lines.append("")
             
             # 核心决策（一句话）
-            one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
+            one_sentence = self._clean_one_sentence(core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary)
             if one_sentence:
-                lines.append(f"📌 **{one_sentence[:80]}**")
+                lines.append(f"📌 **{one_sentence}**")
                 lines.append("")
                 
             # 💰 股息分析 (企业微信精简版)
@@ -868,7 +893,8 @@ class NotificationService:
             if div_data:
                 try:
                     yield_val = float(div_data.get('dividend_yield', 0))
-                    if yield_val > 0.03:
+                    # 注入值是百分比数值，如2.5表示2.5%
+                    if yield_val > 3:
                          lines.append(f"💰 预期股息: **{yield_val:.2f}%**")
                          lines.append("")
                 except:
