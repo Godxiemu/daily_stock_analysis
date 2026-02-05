@@ -586,7 +586,7 @@ class NotificationService:
                         f"💡 *{div_comment}*" if div_comment else "",
                         "",
                     ])
-                except:
+                except (ValueError, TypeError):
                     pass
             
             # ========== 📊 技术面买点分析 (MA120加分机制) ==========
@@ -930,7 +930,7 @@ class NotificationService:
                     # 始终显示预计股息率
                     lines.append(f"💰 预计股息率: **{yield_val:.2f}%**")
                     lines.append("")
-                except:
+                except (ValueError, TypeError):
                     pass
             
             # 📊 技术面买点分析 (企业微信精简版)

@@ -12,8 +12,9 @@ A股自选股智能分析系统 - 存储层
 """
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime, date, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Generator
 from pathlib import Path
 
 import pandas as pd
@@ -81,6 +82,7 @@ class StockDaily(Base):
     ma5 = Column(Float)
     ma10 = Column(Float)
     ma20 = Column(Float)
+    ma120 = Column(Float)  # 半年线（买点分析核心指标）
     volume_ratio = Column(Float)  # 量比
     
     # 数据来源
@@ -114,6 +116,7 @@ class StockDaily(Base):
             'ma5': self.ma5,
             'ma10': self.ma10,
             'ma20': self.ma20,
+            'ma120': self.ma120,
             'volume_ratio': self.volume_ratio,
             'data_source': self.data_source,
         }
@@ -186,21 +189,26 @@ class DatabaseManager:
             cls._instance._engine.dispose()
             cls._instance = None
     
-    def get_session(self) -> Session:
+    @contextmanager
+    def get_session(self) -> Generator[Session, None, None]:
         """
-        获取数据库 Session
+        获取数据库 Session（上下文管理器）
         
         使用示例:
             with db.get_session() as session:
                 # 执行查询
                 session.commit()  # 如果需要
+        
+        Session 会在 with 块结束后自动关闭
         """
         session = self._SessionLocal()
         try:
-            return session
+            yield session
         except Exception:
-            session.close()
+            session.rollback()
             raise
+        finally:
+            session.close()
     
     def has_today_data(self, code: str, target_date: Optional[date] = None) -> bool:
         """
@@ -350,6 +358,7 @@ class DatabaseManager:
                         existing.ma5 = row.get('ma5')
                         existing.ma10 = row.get('ma10')
                         existing.ma20 = row.get('ma20')
+                        existing.ma120 = row.get('ma120')
                         existing.volume_ratio = row.get('volume_ratio')
                         existing.data_source = data_source
                         existing.updated_at = datetime.now()
@@ -368,6 +377,7 @@ class DatabaseManager:
                             ma5=row.get('ma5'),
                             ma10=row.get('ma10'),
                             ma20=row.get('ma20'),
+                            ma120=row.get('ma120'),
                             volume_ratio=row.get('volume_ratio'),
                             data_source=data_source,
                         )
@@ -387,24 +397,26 @@ class DatabaseManager:
     def get_analysis_context(
         self, 
         code: str,
-        target_date: Optional[date] = None
+        target_date: Optional[date] = None,
+        history_days: int = 150
     ) -> Optional[Dict[str, Any]]:
         """
         获取分析所需的上下文数据
         
-        返回今日数据 + 昨日数据的对比信息
+        返回今日数据 + 昨日数据的对比信息 + 历史原始数据
         
         Args:
             code: 股票代码
             target_date: 目标日期（默认今天）
+            history_days: 获取历史数据的天数（用于趋势分析）
             
         Returns:
-            包含今日数据、昨日对比等信息的字典
+            包含今日数据、昨日对比、历史原始数据等信息的字典
         """
         if target_date is None:
             target_date = date.today()
         
-        # 获取最近2天数据
+        # 获取最近2天数据用于对比
         recent_data = self.get_latest_data(code, days=2)
         
         if not recent_data:
@@ -436,6 +448,31 @@ class DatabaseManager:
             
             # 均线形态判断
             context['ma_status'] = self._analyze_ma_status(today_data)
+        
+        # 获取历史原始数据（用于趋势分析和买点分析）
+        history_data = self.get_latest_data(code, days=history_days)
+        if history_data:
+            # 转换为字典列表，按日期升序排列（从旧到新）
+            raw_data_list = [
+                {
+                    'date': item.date.isoformat() if item.date else None,
+                    'open': item.open,
+                    'high': item.high,
+                    'low': item.low,
+                    'close': item.close,
+                    'volume': item.volume,
+                    'amount': item.amount,
+                    'pct_chg': item.pct_chg,
+                    'ma5': item.ma5,
+                    'ma10': item.ma10,
+                    'ma20': item.ma20,
+                    'ma120': item.ma120,  # 半年线 - 买点分析核心指标
+                    'volume_ratio': item.volume_ratio,
+                }
+                for item in reversed(history_data)  # 反转为升序（旧->新）
+            ]
+            context['raw_data'] = raw_data_list
+            logger.debug(f"[{code}] 获取到 {len(raw_data_list)} 天历史数据用于趋势分析")
         
         return context
     

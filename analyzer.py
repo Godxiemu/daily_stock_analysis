@@ -991,6 +991,30 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
+
+        # 添加买点分析数据（MA120 加分机制）
+        if 'buy_point' in context and context['buy_point']:
+            bp = context['buy_point']
+            prompt += f"""
+### 📊 技术买点分析（MA120加分机制）
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| **综合评级** | **{bp.get('label', '')} {bp.get('label_text', '')}** | ⭐最佳/🟢良好/🟡观望/🔴规避 |
+| 短期信号 | {bp.get('short_signal', '无')} | {bp.get('short_signal_detail', '')} |
+| MA120状态 | {bp.get('ma120_status', 'N/A')} | 偏离度 {bp.get('ma120_deviation', 0):+.1f}% |
+| 半年线MA120 | {bp.get('ma120', 'N/A')}元 | 价值区分界线 |
+| 当前价格 | {bp.get('current_price', 'N/A')}元 | |
+| 量比 | {bp.get('volume_ratio', 'N/A')} | |
+
+**📌 系统建议**：{bp.get('current_advice', '无')}
+
+**关键价位**：
+- 加仓位：{bp.get('add_price', 'N/A')}元
+- 止盈位：{bp.get('take_profit_price', 'N/A')}元  
+- 止损位：{bp.get('stop_loss_price', 'N/A')}元
+
+*请综合MA120位置（低于MA120加分）和短期信号（缩量回踩/放量突破）给出最终建议。*
+"""
         
         # 添加昨日对比数据
         if 'yesterday' in context:
