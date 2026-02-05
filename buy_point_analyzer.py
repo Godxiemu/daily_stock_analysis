@@ -25,7 +25,7 @@ class BuyPointResult:
     short_signal_detail: str
     
     # MA120 状态
-    ma120_status: str  # 价格<MA120 / 价格≈MA120 / 价格>MA120
+    ma120_status: str  # 价格小于MA120 / 价格≈MA120 / 价格大于MA120
     ma120_deviation: float  # 相对MA120的偏离度 (%)
     
     # 关键价位
@@ -103,11 +103,11 @@ class BuyPointAnalyzer:
             # 1. 计算 MA120 状态和偏离度
             ma120_deviation = ((current_price - ma120) / ma120) * 100
             if ma120_deviation < -3:
-                ma120_status = "价格<MA120"
+                ma120_status = "价格小于MA120"
             elif ma120_deviation <= 3:
                 ma120_status = "价格≈MA120"
             else:
-                ma120_status = "价格>MA120"
+                ma120_status = "价格大于MA120"
             
             # 2. 判断短期信号
             short_signal, short_signal_detail = self._analyze_short_signal(
@@ -204,7 +204,7 @@ class BuyPointAnalyzer:
         # 有短期信号
         if short_signal in ["缩量回踩", "放量突破"]:
             # MA120 加分
-            if ma120_status == "价格<MA120":
+            if ma120_status == "价格小于MA120":
                 return "⭐", "最佳买点"
             elif ma120_status == "价格≈MA120":
                 return "🟢", "良好买点"
@@ -212,7 +212,7 @@ class BuyPointAnalyzer:
                 return "🟢", "良好买点"
         
         # 无信号但在 MA120 以下
-        if ma120_status == "价格<MA120" and ma120_deviation < -5:
+        if ma120_status == "价格小于MA120" and ma120_deviation < -5:
             return "🟡", "观望(价值区)"
         
         return "🟡", "观望"
@@ -255,7 +255,7 @@ class BuyPointAnalyzer:
             return "建议暂时规避，等待企稳信号"
         
         else:  # 🟡
-            if ma120_status == "价格<MA120":
+            if ma120_status == "价格小于MA120":
                 return "处于价值区，可等待短期买点信号"
             else:
                 return "暂无明确信号，继续观察"

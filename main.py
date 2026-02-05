@@ -456,6 +456,12 @@ class StockAnalysisPipeline:
                     logger.warning(f"[{code}] 无法计算股息率: 价格={price_for_calc}, PE={pe_for_calc}")
             except Exception as e:
                 logger.warning(f"[{code}] 股息率计算失败: {e}")
+                # 确保异常情况下也有 dividend_data
+                if dividend_data is None:
+                    dividend_data = {
+                        'expected_yield': 0,
+                        'reason': f"计算异常: {str(e)[:50]}"
+                    }
 
             # Step 2.6: 获取历史估值和同业比价 (V4.0 Upgrade) - 不再依赖realtime_quote
             valuation_history = None
