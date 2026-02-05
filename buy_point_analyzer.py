@@ -85,8 +85,19 @@ class BuyPointAnalyzer:
             ma120 = float(latest.get('ma120', 0))
             volume_ratio = float(latest.get('volume_ratio', 1.0))
             
+            # 如果数据库中没有 ma120，尝试从历史数据动态计算
+            if ma120 <= 0 and len(df) >= 20:
+                # 计算 MA120（需要至少20条数据，使用可用的全部数据）
+                close_series = df['close'].astype(float)
+                if len(close_series) >= 120:
+                    ma120 = close_series.tail(120).mean()
+                else:
+                    # 数据不足120天，使用所有可用数据计算
+                    ma120 = close_series.mean()
+                logger.info(f"动态计算 MA120 = {ma120:.2f} (基于 {len(close_series)} 天数据)")
+            
             if ma120 <= 0:
-                logger.warning("MA120 数据无效")
+                logger.warning("MA120 数据无效（数据不足）")
                 return None
             
             # 1. 计算 MA120 状态和偏离度
