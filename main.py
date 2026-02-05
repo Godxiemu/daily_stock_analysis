@@ -51,6 +51,7 @@ from search_service import SearchService, SearchResponse
 from stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from market_analyzer import MarketAnalyzer
 from dividend_analyzer import DividendAnalyzer
+from buy_point_analyzer import BuyPointAnalyzer, BuyPointResult
 
 # 配置日志格式
 LOG_FORMAT = '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s'
@@ -169,6 +170,10 @@ class StockAnalysisPipeline:
             logger.info("搜索服务已启用 (Tavily/SerpAPI)")
         else:
             logger.warning("搜索服务未启用（未配置 API Key）")
+        
+        # 初始化买点分析器
+        self.buy_point_analyzer = BuyPointAnalyzer()
+        logger.info("买点分析器已启用 (MA120加分机制)")
     
     def fetch_and_save_stock_data(
         self, 
@@ -200,7 +205,7 @@ class StockAnalysisPipeline:
             
             # 从数据源获取数据
             logger.info(f"[{code}] 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=150)
             
             if df is None or df.empty:
                 return False, "获取数据为空"
@@ -378,6 +383,25 @@ class StockAnalysisPipeline:
                 logger.warning(f"[{code}] 无法获取分析上下文，跳过分析")
                 return None
             
+            # Step 5.5: 买点分析（MA120 + 短期信号复合判断）
+            buy_point_result: Optional[BuyPointResult] = None
+            try:
+                if 'raw_data' in context:
+                    import pandas as pd
+                    raw_data = context['raw_data']
+                    if isinstance(raw_data, list) and len(raw_data) > 0:
+                        df = pd.DataFrame(raw_data)
+                        # 将实时行情转换为字典
+                        realtime_dict = None
+                        if realtime_quote:
+                            realtime_dict = {'current_price': realtime_quote.price}
+                        buy_point_result = self.buy_point_analyzer.analyze(df, realtime_dict)
+                        if buy_point_result:
+                            logger.info(f"[{code}] 买点分析: {buy_point_result.label} {buy_point_result.label_text}, "
+                                       f"MA120偏离={buy_point_result.ma120_deviation:+.1f}%")
+            except Exception as e:
+                logger.warning(f"[{code}] 买点分析失败: {e}")
+            
             # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
             enhanced_context = self._enhance_context(
                 context, 
@@ -387,7 +411,8 @@ class StockAnalysisPipeline:
                 stock_name,  # 传入股票名称
                 dividend_data, # 传入股息数据
                 valuation_history, # New
-                peer_comparison # New
+                peer_comparison, # New
+                buy_point_result  # 传入买点分析结果
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -409,7 +434,8 @@ class StockAnalysisPipeline:
         stock_name: str = "",
         dividend_data: Optional[Dict] = None,
         valuation_history: Optional[Dict] = None,
-        peer_comparison: Optional[Dict] = None
+        peer_comparison: Optional[Dict] = None,
+        buy_point_result: Optional[BuyPointResult] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -422,6 +448,7 @@ class StockAnalysisPipeline:
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
+            buy_point_result: 买点分析结果
             
         Returns:
             增强后的上下文
@@ -487,6 +514,24 @@ class StockAnalysisPipeline:
         # 添加同业比价
         if peer_comparison:
             enhanced['peer_comparison'] = peer_comparison
+        
+        # 添加买点分析结果
+        if buy_point_result:
+            enhanced['buy_point'] = {
+                'label': buy_point_result.label,
+                'label_text': buy_point_result.label_text,
+                'short_signal': buy_point_result.short_signal,
+                'short_signal_detail': buy_point_result.short_signal_detail,
+                'ma120_status': buy_point_result.ma120_status,
+                'ma120_deviation': buy_point_result.ma120_deviation,
+                'add_price': buy_point_result.add_price,
+                'take_profit_price': buy_point_result.take_profit_price,
+                'stop_loss_price': buy_point_result.stop_loss_price,
+                'current_advice': buy_point_result.current_advice,
+                'current_price': buy_point_result.current_price,
+                'ma120': buy_point_result.ma120,
+                'volume_ratio': buy_point_result.volume_ratio,
+            }
         
         return enhanced
     

@@ -572,26 +572,60 @@ class NotificationService:
                 "",
             ])
             
-            # ========== 💰 股息分析 (Dang氏核心) ==========
-            # 从 dashboard 或 result.dashboard 中提取 dividend_analysis
-            # 注意：GeminiAnalyzer 可能会把 dividend_analysis 放在 dashboard 根节点
+            # ========== 💰 预计股息率 ==========
             div_data = dashboard.get('dividend_analysis', {})
             if div_data:
                 div_yield = div_data.get('dividend_yield', 0)
                 div_comment = div_data.get('dividend_comment', '')
                 try:
-                    # 尝试转换数值
                     yield_val = float(div_yield)
-                    # 如果预期股息率 > 3%，显示此板块（注：注入值是百分比数值，如2.5表示2.5%）
-                    if yield_val > 3: 
-                        report_lines.extend([
-                            "#### 💰 生产资料价值 (Dang氏)",
-                            f"预期股息率: **{yield_val:.2f}%** (基于预测EPS测算)",
-                            f"💡 *{div_comment}*",
-                            "",
-                        ])
+                    # 始终显示预计股息率
+                    report_lines.extend([
+                        "#### 💰 预计股息率",
+                        f"**{yield_val:.2f}%** (基于预测EPS测算)",
+                        f"💡 *{div_comment}*" if div_comment else "",
+                        "",
+                    ])
                 except:
                     pass
+            
+            # ========== 📊 技术面买点分析 (MA120加分机制) ==========
+            buy_point = dashboard.get('buy_point', {})
+            if buy_point:
+                bp_label = buy_point.get('label', '🟡')
+                bp_label_text = buy_point.get('label_text', '观望')
+                bp_signal = buy_point.get('short_signal', '')
+                bp_signal_detail = buy_point.get('short_signal_detail', '')
+                bp_ma120_status = buy_point.get('ma120_status', '')
+                bp_ma120_dev = buy_point.get('ma120_deviation', 0)
+                bp_advice = buy_point.get('current_advice', '')
+                bp_add = buy_point.get('add_price')
+                bp_tp = buy_point.get('take_profit_price')
+                bp_sl = buy_point.get('stop_loss_price')
+                
+                report_lines.extend([
+                    "#### 📊 技术面买点分析",
+                    "",
+                    f"**{bp_label} {bp_label_text}**",
+                    "",
+                    f"├─ 短期信号：{bp_signal} ({bp_signal_detail})",
+                    f"├─ MA120状态：{bp_ma120_status} ({bp_ma120_dev:+.1f}%)",
+                    "",
+                    f"📌 **建议**：{bp_advice}",
+                    "",
+                ])
+                
+                # 关键价位
+                key_prices = []
+                if bp_add:
+                    key_prices.append(f"加仓:{bp_add}")
+                if bp_tp:
+                    key_prices.append(f"止盈:{bp_tp}")
+                if bp_sl:
+                    key_prices.append(f"止损:{bp_sl}")
+                if key_prices:
+                    report_lines.append(f"💼 关键位：{' | '.join(key_prices)}")
+                    report_lines.append("")
             
             # ========== 📈 估值分位与同业比价 (V4.0 核心数据) ==========
             val_hist = dashboard.get('valuation_history', {})
@@ -888,17 +922,32 @@ class NotificationService:
                 lines.append(f"📌 **{one_sentence}**")
                 lines.append("")
                 
-            # 💰 股息分析 (企业微信精简版)
+            # 💰 预计股息率 (企业微信精简版)
             div_data = dashboard.get('dividend_analysis', {})
             if div_data:
                 try:
                     yield_val = float(div_data.get('dividend_yield', 0))
-                    # 注入值是百分比数值，如2.5表示2.5%
-                    if yield_val > 3:
-                         lines.append(f"💰 预期股息: **{yield_val:.2f}%**")
-                         lines.append("")
+                    # 始终显示预计股息率
+                    lines.append(f"💰 预计股息率: **{yield_val:.2f}%**")
+                    lines.append("")
                 except:
                     pass
+            
+            # 📊 技术面买点分析 (企业微信精简版)
+            buy_point = dashboard.get('buy_point', {})
+            if buy_point:
+                bp_label = buy_point.get('label', '🟡')
+                bp_label_text = buy_point.get('label_text', '观望')
+                bp_advice = buy_point.get('current_advice', '')
+                bp_add = buy_point.get('add_price')
+                bp_sl = buy_point.get('stop_loss_price')
+                
+                lines.append(f"📊 买点: **{bp_label} {bp_label_text}**")
+                if bp_advice:
+                    lines.append(f"   {bp_advice[:60]}")
+                if bp_add and bp_sl:
+                    lines.append(f"   💼 加仓:{bp_add} | 止损:{bp_sl}")
+                lines.append("")
             
             # 重要信息区（舆情+基本面）
             info_lines = []
