@@ -33,6 +33,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 import argparse
 import logging
 import sys
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timezone, timedelta
@@ -174,6 +175,11 @@ class StockAnalysisPipeline:
         # 初始化买点分析器
         self.buy_point_analyzer = BuyPointAnalyzer()
         logger.info("买点分析器已启用 (MA120加分机制)")
+        
+        # 股票名称缓存（Tavily兜底机制）
+        self._name_cache_path = Path("data/stock_names_cache.json")
+        self._name_cache = self._load_name_cache()
+        self._name_cache_dirty = False  # 是否有新数据需要写入
     
     def fetch_and_save_stock_data(
         self, 
@@ -221,6 +227,137 @@ class StockAnalysisPipeline:
             logger.error(f"[{code}] {error_msg}")
             return False, error_msg
     
+    def _load_name_cache(self) -> Dict[str, Dict[str, Any]]:
+        """加载股票名称缓存"""
+        try:
+            if self._name_cache_path.exists():
+                with open(self._name_cache_path, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                    logger.info(f"[名称缓存] 加载成功, 共 {len(cache)} 条记录")
+                    return cache
+        except Exception as e:
+            logger.warning(f"[名称缓存] 加载失败: {e}")
+        return {}
+    
+    def _save_name_cache(self) -> None:
+        """保存股票名称缓存"""
+        if not self._name_cache_dirty:
+            return
+        try:
+            self._name_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._name_cache_path, 'w', encoding='utf-8') as f:
+                json.dump(self._name_cache, f, ensure_ascii=False, indent=2)
+            logger.info(f"[名称缓存] 保存成功, 共 {len(self._name_cache)} 条记录")
+            self._name_cache_dirty = False
+        except Exception as e:
+            logger.warning(f"[名称缓存] 保存失败: {e}")
+    
+    def _search_stock_name_tavily(self, code: str) -> Optional[str]:
+        """使用 Tavily 搜索股票名称（最后兜底）"""
+        if not self.search_service.is_available:
+            return None
+        
+        try:
+            # 构造搜索查询
+            query = f"{code} A股 股票名称"
+            logger.info(f"[Tavily兜底] 搜索股票名称: {query}")
+            
+            # 使用搜索服务
+            response = self.search_service.search(query, max_results=3)
+            
+            if not response.success or not response.results:
+                return None
+            
+            # 从搜索结果中提取股票名称
+            # 通常搜索结果的标题或摘要会包含"XXX(代码)"格式
+            import re
+            for result in response.results:
+                text = result.title + " " + result.snippet
+                # 匹配 "股票名称(代码)" 或 "代码 股票名称" 格式
+                patterns = [
+                    rf'([^\s\(\)]{2,8})\s*[\(（]{code}[\)）]',  # 名称(代码)
+                    rf'{code}\s+([^\s\(\)]{2,8})',  # 代码 名称
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, text)
+                    if match:
+                        name = match.group(1).strip()
+                        # 过滤无效名称
+                        if name and len(name) >= 2 and not name.startswith('股票'):
+                            logger.info(f"[Tavily兜底] 成功获取股票名称: {code} -> {name}")
+                            return name
+            
+            return None
+        except Exception as e:
+            logger.warning(f"[Tavily兜底] 搜索失败: {e}")
+            return None
+    
+    def _get_stock_name_with_fallback(
+        self, 
+        code: str, 
+        realtime_quote: Optional[RealtimeQuote] = None
+    ) -> str:
+        """
+        获取股票名称（带多级兜底）
+        
+        优先级：
+        1. STOCK_NAME_MAP（静态映射）
+        2. 本地缓存（stock_names_cache.json）
+        3. 实时行情 API（realtime_quote.name）
+        4. 基础信息 API（get_stock_name）
+        5. Tavily 搜索（最后兜底）→ 写入缓存
+        """
+        # 1. 静态映射
+        name = STOCK_NAME_MAP.get(code, '')
+        if name:
+            return name
+        
+        # 2. 本地缓存
+        if code in self._name_cache:
+            cached = self._name_cache[code]
+            logger.debug(f"[缓存命中] 股票名称: {code} -> {cached.get('name')}")
+            return cached.get('name', f'股票{code}')
+        
+        # 3. 实时行情
+        if realtime_quote and realtime_quote.name:
+            name = realtime_quote.name
+            # 写入缓存
+            self._name_cache[code] = {
+                'name': name,
+                'source': 'realtime',
+                'updated_at': date.today().isoformat()
+            }
+            self._name_cache_dirty = True
+            return name
+        
+        # 4. 基础信息 API
+        try:
+            name = self.akshare_fetcher.get_stock_name(code)
+            if name:
+                self._name_cache[code] = {
+                    'name': name,
+                    'source': 'akshare',
+                    'updated_at': date.today().isoformat()
+                }
+                self._name_cache_dirty = True
+                return name
+        except Exception as e:
+            logger.warning(f"[{code}] 基础信息API获取名称失败: {e}")
+        
+        # 5. Tavily 搜索（最后兜底）
+        name = self._search_stock_name_tavily(code)
+        if name:
+            self._name_cache[code] = {
+                'name': name,
+                'source': 'tavily',
+                'updated_at': date.today().isoformat()
+            }
+            self._name_cache_dirty = True
+            return name
+        
+        # 全部失败，返回默认值
+        return f'股票{code}'
+    
     def analyze_stock(self, code: str) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
@@ -240,34 +377,19 @@ class StockAnalysisPipeline:
             AnalysisResult 或 None（如果分析失败）
         """
         try:
-            # 获取股票名称（优先从实时行情获取真实名称）
-            stock_name = STOCK_NAME_MAP.get(code, '')
-            
             # Step 1: 获取实时行情（量比、换手率等）
             realtime_quote: Optional[RealtimeQuote] = None
             try:
                 realtime_quote = self.akshare_fetcher.get_realtime_quote(code)
                 if realtime_quote:
-                    # 使用实时行情返回的真实股票名称
-                    if realtime_quote.name:
-                        stock_name = realtime_quote.name
-                    logger.info(f"[{code}] {stock_name} 实时行情: 价格={realtime_quote.price}, "
+                    logger.info(f"[{code}] 实时行情: 价格={realtime_quote.price}, "
                               f"量比={realtime_quote.volume_ratio}, 换手率={realtime_quote.turnover_rate}%")
             except Exception as e:
                 logger.warning(f"[{code}] 获取实时行情失败: {e}")
             
-            # 如果还是没有名称 (或仅有默认名称)，尝试专门获取名称接口
-            if not stock_name or stock_name.startswith('股票'):
-                try:
-                    name_fallback = self.akshare_fetcher.get_stock_name(code)
-                    if name_fallback:
-                        stock_name = name_fallback
-                        logger.info(f"[{code}] 通过基础信息接口获取名称: {stock_name}")
-                except Exception as e:
-                     logger.warning(f"[{code}] 获取名称失败: {e}")
-
-            if not stock_name:
-                stock_name = f'股票{code}'
+            # 获取股票名称（带多级兜底：静态映射 → 缓存 → API → Tavily）
+            stock_name = self._get_stock_name_with_fallback(code, realtime_quote)
+            logger.info(f"[{code}] 股票名称: {stock_name}")
             
             # Step 2: 获取筹码分布
             chip_data: Optional[ChipDistribution] = None
@@ -751,6 +873,9 @@ class StockAnalysisPipeline:
                 self._send_notifications(results, skip_push=True)
             else:
                 self._send_notifications(results)
+        
+        # 保存股票名称缓存（Tavily兜底机制）
+        self._save_name_cache()
         
         return results
     

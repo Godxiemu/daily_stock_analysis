@@ -37,6 +37,14 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
+      - name: 恢复股票名称缓存
+        uses: actions/cache@v4
+        with:
+          path: data/stock_names_cache.json
+          key: stock-names-cache-${{ github.run_id }}
+          restore-keys: |
+            stock-names-cache-
+      
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
