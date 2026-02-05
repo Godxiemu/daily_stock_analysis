@@ -22,10 +22,10 @@ class BuyPointResult:
     ma120_deviation: float  # 相对MA120的偏离度 (%)
     
     # 关键价位
-    add_price: Optional[float]  # 加仓位
+    add_price: Optional[float] = None # 加仓位
     add_price_desc: str = ""  # 加仓位描述（如：MA20支撑/黄金分割0.618）
-    take_profit_price: Optional[float]  # 止盈位
-    stop_loss_price: Optional[float]  # 止损位
+    take_profit_price: Optional[float] = None # 止盈位
+    stop_loss_price: Optional[float] = None # 止损位
     
     # 当前建议
     current_advice: str
@@ -154,7 +154,7 @@ class BuyPointAnalyzer:
         ma20: float, 
         volume_ratio: float,
         df: pd.DataFrame
-    ) -> tuple:
+    ) -> Tuple[str, str]:
         """分析短期信号"""
         
         # 计算乖离率
@@ -190,7 +190,7 @@ class BuyPointAnalyzer:
         
         return "无信号", "等待明确信号"
     
-    def _determine_label(self, short_signal: str, ma120_status: str, ma120_deviation: float) -> tuple:
+    def _determine_label(self, short_signal: str, ma120_status: str, ma120_deviation: float) -> Tuple[str, str]:
         """综合判定标签"""
         
         # 破位 → 规避
@@ -223,7 +223,7 @@ class BuyPointAnalyzer:
         df: pd.DataFrame, 
         current_price: float, 
         ma_dict: dict
-    ) -> tuple[Optional[float], str]:
+    ) -> Tuple[Optional[float], str]:
         """
         计算支撑位（加仓点）
         策略：黄金分割 + 均线共振
