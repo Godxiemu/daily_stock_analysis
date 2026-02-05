@@ -401,37 +401,34 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取筹码分布失败: {e}")
             
-            # Step 2.5: Dang氏预期股息率计算 (带兜底逻辑)
+            # Step 2.5: Dang氏预期股息率计算 (优先使用收盘数据)
             dividend_data = None
             try:
-                # 优先使用实时行情，否则从其他API兜底
                 price_for_calc = None
                 pe_for_calc = None
                 
-                if realtime_quote and realtime_quote.price > 0:
-                    price_for_calc = realtime_quote.price
-                    pe_for_calc = realtime_quote.pe_ratio
-                else:
-                    # 兜底方案：使用 stock_individual_info_em 接口获取价格
-                    import akshare as ak
-                    try:
-                        info_df = ak.stock_individual_info_em(symbol=code)
-                        if info_df is not None and not info_df.empty:
-                            # 第一行 (index=0) 固定是股价
-                            try:
-                                price_for_calc = float(info_df.iloc[0, 1])
-                                logger.info(f"[{code}] 使用基础信息接口价格兜底: {price_for_calc}")
-                            except Exception as e:
-                                logger.debug(f"[{code}] 价格转换失败: {e}")
-                    except Exception as e:
-                        logger.debug(f"[{code}] 基础信息接口价格获取失败: {e}")
-                    
-                    # 兜底: 从历史估值接口获取PE
-                    if price_for_calc:
-                        val_hist = self.akshare_fetcher.get_valuation_history(code)
-                        if val_hist and 'current_pe' in val_hist:
-                            pe_for_calc = val_hist['current_pe']
-                            logger.info(f"[{code}] 使用历史估值接口PE兜底: {pe_for_calc:.2f}")
+                # 优先从数据库获取收盘价（收盘后分析场景）
+                context_data = self.db.get_analysis_context(code)
+                if context_data and 'today' in context_data:
+                    today_data = context_data['today']
+                    close_price = today_data.get('close')
+                    if close_price and close_price > 0:
+                        price_for_calc = close_price
+                        logger.info(f"[{code}] 使用数据库收盘价: {price_for_calc}")
+                
+                # 如果数据库没有收盘价，尝试实时行情（盘中场景）
+                if not price_for_calc:
+                    if realtime_quote and realtime_quote.price > 0:
+                        price_for_calc = realtime_quote.price
+                        pe_for_calc = realtime_quote.pe_ratio
+                        logger.info(f"[{code}] 使用实时行情价格: {price_for_calc}")
+                
+                # 获取PE：优先历史估值接口（更稳定）
+                if not pe_for_calc or pe_for_calc <= 0:
+                    val_hist = self.akshare_fetcher.get_valuation_history(code)
+                    if val_hist and 'current_pe' in val_hist:
+                        pe_for_calc = val_hist['current_pe']
+                        logger.info(f"[{code}] 使用历史估值PE: {pe_for_calc:.2f}")
                 
                 # 执行股息率计算
                 if price_for_calc and price_for_calc > 0 and pe_for_calc and pe_for_calc > 0:
