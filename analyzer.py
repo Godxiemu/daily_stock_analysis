@@ -806,6 +806,11 @@ class GeminiAnalyzer:
                 if 'realtime' in context and context['realtime']:
                     result.dashboard['realtime'] = context['realtime']
                     logger.debug(f"已注入实时行情数据")
+                
+                # 注入买点分析数据
+                if 'buy_point' in context and context['buy_point']:
+                    result.dashboard['buy_point'] = context['buy_point']
+                    logger.info(f"已注入买点分析数据: {context['buy_point'].get('label', '')} {context['buy_point'].get('label_text', '')}")
                     
             except Exception as inject_err:
                 logger.warning(f"扩展数据注入失败: {inject_err}")
