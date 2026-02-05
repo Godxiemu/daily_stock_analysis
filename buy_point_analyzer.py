@@ -21,12 +21,6 @@ class BuyPointResult:
     ma120_status: str  # 价格小于MA120 / 价格≈MA120 / 价格大于MA120
     ma120_deviation: float  # 相对MA120的偏离度 (%)
     
-    # 关键价位
-    add_price: Optional[float] = None # 加仓位
-    add_price_desc: str = ""  # 加仓位描述（如：MA20支撑/黄金分割0.618）
-    take_profit_price: Optional[float] = None # 止盈位
-    stop_loss_price: Optional[float] = None # 止损位
-    
     # 当前建议
     current_advice: str
     
@@ -37,6 +31,12 @@ class BuyPointResult:
     ma20: float
     ma120: float
     volume_ratio: float
+    
+    # 关键价位（可选字段，有默认值）
+    add_price: Optional[float] = None # 加仓位
+    add_price_desc: str = ""  # 加仓位描述（如：MA20支撑/黄金分割0.618）
+    take_profit_price: Optional[float] = None # 止盈位
+    stop_loss_price: Optional[float] = None # 止损位
 
 class BuyPointAnalyzer:
     """复合买点分析器"""
