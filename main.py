@@ -438,13 +438,21 @@ class StockAnalysisPipeline:
                     exp_yield, exp_reason = self.dividend_analyzer.calculate_expected_yield(
                         code, price_for_calc, pe_for_calc
                     )
+                    # 始终创建 dividend_data，即使 exp_yield <= 0 也要传递让报告显示
+                    dividend_data = {
+                        'expected_yield': exp_yield,
+                        'reason': exp_reason if exp_yield > 0 else "无派息历史或派息率为0"
+                    }
                     if exp_yield > 0:
-                        dividend_data = {
-                            'expected_yield': exp_yield,
-                            'reason': exp_reason
-                        }
                         logger.info(f"[{code}] 预期股息率: {exp_yield:.2f}% ({exp_reason})")
+                    else:
+                        logger.info(f"[{code}] 预期股息率: 0% (原因: {exp_reason})")
                 else:
+                    # 即使无法计算，也创建一个空的 dividend_data 用于报告展示
+                    dividend_data = {
+                        'expected_yield': 0,
+                        'reason': f"数据不足: 价格={price_for_calc}, PE={pe_for_calc}"
+                    }
                     logger.warning(f"[{code}] 无法计算股息率: 价格={price_for_calc}, PE={pe_for_calc}")
             except Exception as e:
                 logger.warning(f"[{code}] 股息率计算失败: {e}")
