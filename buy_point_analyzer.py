@@ -1,17 +1,10 @@
-"""
-复合技术买点分析器
-
-结合短期技术信号和 MA120（半年线）的复合买点分析系统
-输出标签化的买卖建议
-"""
-
-import logging
+﻿import logging
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
 import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class BuyPointResult:
@@ -30,6 +23,7 @@ class BuyPointResult:
     
     # 关键价位
     add_price: Optional[float]  # 加仓位
+    add_price_desc: str = ""  # 加仓位描述（如：MA20支撑/黄金分割0.618）
     take_profit_price: Optional[float]  # 止盈位
     stop_loss_price: Optional[float]  # 止损位
     
@@ -43,7 +37,6 @@ class BuyPointResult:
     ma20: float
     ma120: float
     volume_ratio: float
-
 
 class BuyPointAnalyzer:
     """复合买点分析器"""
@@ -67,17 +60,18 @@ class BuyPointAnalyzer:
             BuyPointResult 或 None
         """
         if df is None or df.empty or len(df) < 5:
-            logger.warning("数据不足，无法分析买点")
             return None
-        
+            
         try:
-            # 获取最新数据
+            # 获取最新数据 (使用最后一行)
             latest = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) > 1 else latest
+            prev = df.iloc[-2]
             
-            # 使用实时价格或最新收盘价
-            current_price = float(realtime_quote.get('current_price', latest['close'])) if realtime_quote else float(latest['close'])
-            
+            # 基础数据
+            current_price = float(latest['close'])
+            if realtime_quote and realtime_quote.get('price', 0) > 0:
+                current_price = float(realtime_quote['price'])
+                
             # 获取均线数据
             ma5 = float(latest.get('ma5', 0))
             ma10 = float(latest.get('ma10', 0))
@@ -87,14 +81,13 @@ class BuyPointAnalyzer:
             
             # 如果数据库中没有 ma120，尝试从历史数据动态计算
             if ma120 <= 0 and len(df) >= 20:
-                # 计算 MA120（需要至少20条数据，使用可用的全部数据）
+                # 计算 MA120
                 close_series = df['close'].astype(float)
                 if len(close_series) >= 120:
                     ma120 = close_series.tail(120).mean()
                 else:
-                    # 数据不足120天，使用所有可用数据计算
                     ma120 = close_series.mean()
-                logger.info(f"动态计算 MA120 = {ma120:.2f} (基于 {len(close_series)} 天数据)")
+                logger.debug(f"动态计算 MA120 = {ma120:.2f}")
             
             if ma120 <= 0:
                 logger.warning("MA120 数据无效（数据不足）")
@@ -117,8 +110,12 @@ class BuyPointAnalyzer:
             # 3. 综合判定标签
             label, label_text = self._determine_label(short_signal, ma120_status, ma120_deviation)
             
-            # 4. 计算关键价位
-            add_price = round(ma10, 2) if ma10 > 0 else None
+            # 4. 计算关键价位 (优化逻辑)
+            ma_dict = {
+                'MA5': ma5, 'MA10': ma10, 'MA20': ma20, 'MA120': ma120
+            }
+            add_price, add_price_desc = self._calculate_support_price(df, current_price, ma_dict)
+            
             take_profit_price = self._calculate_take_profit(df, current_price)
             stop_loss_price = round(ma20 * 0.98, 2) if ma20 > 0 else None  # MA20 下方 2%
             
@@ -133,6 +130,7 @@ class BuyPointAnalyzer:
                 ma120_status=ma120_status,
                 ma120_deviation=round(ma120_deviation, 2),
                 add_price=add_price,
+                add_price_desc=add_price_desc,
                 take_profit_price=take_profit_price,
                 stop_loss_price=stop_loss_price,
                 current_advice=current_advice,
@@ -143,11 +141,11 @@ class BuyPointAnalyzer:
                 ma120=round(ma120, 2),
                 volume_ratio=round(volume_ratio, 2)
             )
-            
+        
         except Exception as e:
             logger.error(f"买点分析失败: {e}")
             return None
-    
+
     def _analyze_short_signal(
         self, 
         price: float, 
@@ -178,13 +176,15 @@ class BuyPointAnalyzer:
             # 检查是否突破前高
             recent_high = df['high'].tail(20).max() if len(df) >= 20 else df['high'].max()
             if price >= recent_high * 0.98:
-                return "放量突破", f"量比{volume_ratio:.2f}, 接近前高"
-        
-        # 破位信号
-        if price < ma20 and volume_ratio > 1.2:
-            return "破位", f"跌破MA20, 量比{volume_ratio:.2f}"
-        
-        # 乖离过大（追高风险）
+                return "放量突破", f"量比{volume_ratio:.2f}, 突破近期高点"
+            else:
+                return "放量上行", f"量比{volume_ratio:.2f}, 均线上方"
+                
+        # 破位型（MA20作为生命线）
+        if ma20 > 0 and price < ma20 * 0.98:
+            return "破位", "跌破MA20支撑"
+            
+        # 乖离过大（短期风险）
         if bias_ma5 > 5 or bias_ma10 > 8:
             return "乖离过大", f"MA5乖离{bias_ma5:.1f}%, 追高风险"
         
@@ -217,6 +217,99 @@ class BuyPointAnalyzer:
         
         return "🟡", "观望"
     
+    
+    def _calculate_support_price(
+        self, 
+        df: pd.DataFrame, 
+        current_price: float, 
+        ma_dict: dict
+    ) -> tuple[Optional[float], str]:
+        """
+        计算支撑位（加仓点）
+        策略：黄金分割 + 均线共振
+        """
+        try:
+            if len(df) < 60:
+                # 数据不足，仅使用均线
+                candidates = []
+                for name, val in ma_dict.items():
+                    if 0 < val < current_price:
+                        candidates.append((val, f"{name}支撑"))
+                
+                if candidates:
+                    # 返回最大的那个（最近的支撑）
+                    best = max(candidates, key=lambda x: x[0])
+                    return round(best[0], 2), best[1]
+                return None, ""
+            
+            # 1. 计算黄金分割位 (近60日)
+            recent_high = df['high'].tail(60).max()
+            recent_low = df['low'].tail(60).min()
+            price_range = recent_high - recent_low
+            
+            fib_levels = {
+                0.382: recent_high - price_range * 0.382,
+                0.500: recent_high - price_range * 0.500,
+                0.618: recent_high - price_range * 0.618
+            }
+            
+            # 2. 寻找共振（黄金分割 ±1.5% 范围内有均线）
+            resonance_supports = []
+            
+            for ratio, fib_price in fib_levels.items():
+                if fib_price >= current_price: continue  # 只找下方的
+                
+                # 检查是否有均线在此位置附近
+                matched_mas = []
+                for ma_name, ma_val in ma_dict.items():
+                    if abs(ma_val - fib_price) / fib_price < 0.015:  # 1.5% 误差内
+                        matched_mas.append(ma_name)
+                
+                if matched_mas:
+                    desc = f"黄金分割{ratio:.3f} + {'/'.join(matched_mas)}共振"
+                    resonance_supports.append((fib_price, desc))
+                else:
+                    # 单纯黄金分割支撑（权重较低）
+                    desc = f"黄金分割{ratio:.3f}支撑"
+                    resonance_supports.append((fib_price, desc))
+            
+            # 3. 加入单纯均线支撑（作为补充）
+            for ma_name, ma_val in ma_dict.items():
+                if 0 < ma_val < current_price:
+                    # 避免与黄金分割重复（如果已经在共振里了，就不加了）
+                    is_duplicate = False
+                    for res_p, _ in resonance_supports:
+                        if abs(res_p - ma_val) / ma_val < 0.015:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
+                        resonance_supports.append((ma_val, f"{ma_name}支撑"))
+            
+            if not resonance_supports:
+                return None, ""
+            
+            # 4. 选择最优支撑
+            # 优先选共振，其次选最近的
+            # 这里简化逻辑：直接选下方最近的一个强支撑
+            
+            # 过滤掉太近的（比如只差 0.5%），除非是暴跌后的反弹
+            valid_supports = [s for s in resonance_supports if s[0] < current_price * 0.995]
+            
+            if not valid_supports:
+                # 如果都很近，或者没有下方的，返回空
+                return None, ""
+            
+            # 按价格从高到低排序（离现价最近的）
+            valid_supports.sort(key=lambda x: x[0], reverse=True)
+            
+            # 返回最近的一个
+            best_support = valid_supports[0]
+            return round(best_support[0], 2), best_support[1]
+            
+        except Exception as e:
+            logger.warning(f"计算支撑位失败: {e}")
+            return None, ""
+
     def _calculate_take_profit(self, df: pd.DataFrame, current_price: float) -> Optional[float]:
         """计算止盈位（前高压力）"""
         try:
@@ -280,14 +373,19 @@ class BuyPointAnalyzer:
         # 关键价位
         key_prices = []
         if result.add_price:
-            key_prices.append(f"加仓:{result.add_price}")
+            if result.add_price_desc:
+                key_prices.append(f"加仓:{result.add_price}({result.add_price_desc})")
+            else:
+                key_prices.append(f"加仓:{result.add_price}")
+        
         if result.take_profit_price:
             key_prices.append(f"止盈:{result.take_profit_price}")
+            
         if result.stop_loss_price:
             key_prices.append(f"止损:{result.stop_loss_price}")
-        
+            
         if key_prices:
             lines.append(f"💼 关键位：{' | '.join(key_prices)}")
-            lines.append("")
-        
+            
+        lines.append("")
         return lines
