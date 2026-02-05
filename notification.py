@@ -240,6 +240,9 @@ class NotificationService:
         # 截断过长内容
         if len(text) > 200:
             text = text[:200] + "..."
+            
+        # 替换 HTML 特殊字符，防止 Markdown 解析错误 (如 MA5<MA10 会被当做标签而截断)
+        text = text.replace('<', '小于').replace('>', '大于')
         
         return text if text else "暂无决策建议"
     
